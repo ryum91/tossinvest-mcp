@@ -12,6 +12,8 @@
 | | `get_trades` | 당일 체결 내역 조회 |
 | | `get_candles` | 캔들(OHLCV) 차트 데이터 (1분봉/일봉) |
 | | `get_price_limits` | 상한가/하한가 조회 |
+| 기술 지표 | `get_ema` | 지수이동평균(EMA) — 봉 단위·기간·기준가 지정 |
+| | `get_rsi` | 상대강도지수(RSI) — 과매수/과매도 구간·시그널 라인·크로스오버 신호 포함 |
 | 종목 정보 | `get_stocks` | 종목 기본 정보 (최대 200종목) |
 | | `get_stock_warnings` | 투자 유의사항 조회 |
 | 시장 정보 | `get_exchange_rate` | KRW↔USD 환율 조회 |
@@ -89,6 +91,13 @@ AAPL 일봉 차트 100개 가져와
 
 삼성전자 1주 시장가 매수
 → create_order(symbol: "005930", side: "BUY", order_type: "MARKET", quantity: "1", ...)
+
+AAPL 일봉 20일 EMA 계산해줘
+→ get_ema(symbol: "AAPL", interval: "1d", period: 20)
+
+삼성전자 RSI 알려줘
+→ get_rsi(symbol: "005930", interval: "1d")
+  (기본값: period=14, overbought=70, oversold=30, signal_period=14)
 ```
 
 ## 개발
