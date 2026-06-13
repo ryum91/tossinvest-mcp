@@ -227,6 +227,56 @@ function calculateRSI(prices: number[], period: number): { time_index: number; r
   return results;
 }
 
+function calculateMACD(
+  prices: number[],
+  fast: number,
+  slow: number,
+  signal: number,
+): { price_index: number; macd: number; signal: number; histogram: number }[] {
+  const fastEMA = calculateEMA(prices, fast);
+  const slowEMA = calculateEMA(prices, slow);
+  if (fastEMA.length === 0 || slowEMA.length === 0) return [];
+
+  // fastEMA[i] → prices[fast-1+i], slowEMA[i] → prices[slow-1+i]
+  const offset = slow - fast;
+  const macdLine = slowEMA.map((s, i) => fastEMA[i + offset] - s);
+
+  const signalLine = calculateEMA(macdLine, signal);
+  if (signalLine.length === 0) return [];
+
+  return signalLine.map((sig, j) => {
+    const macdIdx = signal - 1 + j;
+    const macd = macdLine[macdIdx];
+    return { price_index: slow + signal - 2 + j, macd, signal: sig, histogram: macd - sig };
+  });
+}
+
+function calculateBollingerBands(
+  prices: number[],
+  period: number,
+  multiplier: number,
+): { price_index: number; middle: number; upper: number; lower: number; percent_b: number; bandwidth: number }[] {
+  const results = [];
+  for (let i = period - 1; i < prices.length; i++) {
+    const slice = prices.slice(i - period + 1, i + 1);
+    const middle = slice.reduce((a, b) => a + b, 0) / period;
+    const variance = slice.reduce((sum, p) => sum + (p - middle) ** 2, 0) / period;
+    const stdDev = Math.sqrt(variance);
+    const upper = middle + multiplier * stdDev;
+    const lower = middle - multiplier * stdDev;
+    const range = upper - lower;
+    results.push({
+      price_index: i,
+      middle,
+      upper,
+      lower,
+      percent_b: range === 0 ? 0.5 : (prices[i] - lower) / range,
+      bandwidth: range === 0 ? 0 : range / middle,
+    });
+  }
+  return results;
+}
+
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 const tools: Tool[] = [
@@ -352,6 +402,52 @@ const tools: Tool[] = [
         signal_period: {
           type: "number",
           description: "시그널 라인 기간: RSI에 EMA를 적용해 크로스오버 신호를 생성 (선택사항, 예: 9)",
+        },
+      },
+    },
+  },
+
+  {
+    name: "get_macd",
+    description:
+      "종목의 MACD(이동평균 수렴확산)를 계산합니다. MACD 라인, 시그널 라인, 히스토그램, 크로스오버 신호를 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"],
+          description: "봉 단위: 1m(1분), 5m(5분), 30m(30분), 60m(60분/1시간), 1d(일봉), 1w(주봉), 1mo(월봉)",
+        },
+        fast_period: { type: "number", description: "빠른 EMA 기간 (기본값 12)" },
+        slow_period: { type: "number", description: "느린 EMA 기간 (기본값 26)" },
+        signal_period: { type: "number", description: "시그널 라인 기간 (기본값 9)" },
+      },
+    },
+  },
+
+  {
+    name: "get_bollinger_bands",
+    description:
+      "종목의 볼린저 밴드를 계산합니다. 중간선(SMA), 상단·하단 밴드, %B(현재가 위치), 밴드폭을 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"],
+          description: "봉 단위: 1m(1분), 5m(5분), 30m(30분), 60m(60분/1시간), 1d(일봉), 1w(주봉), 1mo(월봉)",
+        },
+        period: { type: "number", description: "SMA 기간 (기본값 20)" },
+        multiplier: { type: "number", description: "표준편차 배수 (기본값 2)" },
+        price_field: {
+          type: "string",
+          enum: ["close", "open", "high", "low", "hl_avg", "hlc_avg", "ohlc_avg"],
+          description: "계산 기준가 (기본값 close)",
         },
       },
     },
@@ -833,6 +929,125 @@ async function handleTool(name: string, args: Args): Promise<unknown> {
         latest_zone: latest?.zone ?? null,
         ...(latest?.signal !== undefined && { latest_signal: latest.signal }),
         rsi: results,
+      };
+    }
+
+    case "get_macd": {
+      const symbol = String(args.symbol);
+      const macdInterval = String(args.interval) as EmaInterval;
+      const fast = Number(args.fast_period ?? 12);
+      const slow = Number(args.slow_period ?? 26);
+      const signal = Number(args.signal_period ?? 9);
+
+      const rawPerUnit: Record<EmaInterval, number> = {
+        "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22,
+      };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(macdInterval) ? "1d" : "1m";
+      const rawNeeded = (slow + signal) * 2 * rawPerUnit[macdInterval];
+
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, rawNeeded);
+      const candles = !["1d", "1m"].includes(macdInterval)
+        ? aggregateCandles(rawCandles, makeBucketKey(macdInterval))
+        : rawCandles;
+
+      if (candles.length < slow + signal - 1) {
+        throw new Error(
+          `MACD 계산에 필요한 데이터가 부족합니다. 필요: ${slow + signal - 1}개, 조회됨: ${candles.length}개 (${macdInterval} 봉)`,
+        );
+      }
+
+      const prices = candles.map((c) => c.close);
+      const macdData = calculateMACD(prices, fast, slow, signal);
+
+      const results = macdData.map((d, i) => {
+        const prev = i > 0 ? macdData[i - 1] : null;
+        const crossover =
+          prev !== null
+            ? prev.macd < prev.signal && d.macd >= d.signal
+              ? "bullish"
+              : prev.macd > prev.signal && d.macd <= d.signal
+              ? "bearish"
+              : null
+            : null;
+        return {
+          time: candles[d.price_index].time,
+          macd: Math.round(d.macd * 100) / 100,
+          signal: Math.round(d.signal * 100) / 100,
+          histogram: Math.round(d.histogram * 100) / 100,
+          ...(crossover !== null && { crossover }),
+        };
+      });
+
+      const latest = results[results.length - 1];
+      return {
+        symbol,
+        interval: macdInterval,
+        fast_period: fast,
+        slow_period: slow,
+        signal_period: signal,
+        candle_count: candles.length,
+        macd_count: results.length,
+        latest_macd: latest?.macd ?? null,
+        latest_signal: latest?.signal ?? null,
+        latest_histogram: latest?.histogram ?? null,
+        macd: results,
+      };
+    }
+
+    case "get_bollinger_bands": {
+      const symbol = String(args.symbol);
+      const bbInterval = String(args.interval) as EmaInterval;
+      const period = Number(args.period ?? 20);
+      const multiplier = Number(args.multiplier ?? 2);
+      const priceField: PriceField = (args.price_field as PriceField) ?? "close";
+
+      const rawPerUnit: Record<EmaInterval, number> = {
+        "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22,
+      };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(bbInterval) ? "1d" : "1m";
+      const rawNeeded = period * 2 * rawPerUnit[bbInterval];
+
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, rawNeeded);
+      const candles = !["1d", "1m"].includes(bbInterval)
+        ? aggregateCandles(rawCandles, makeBucketKey(bbInterval))
+        : rawCandles;
+
+      if (candles.length < period) {
+        throw new Error(
+          `볼린저 밴드 계산에 필요한 데이터가 부족합니다. 필요: ${period}개, 조회됨: ${candles.length}개 (${bbInterval} 봉)`,
+        );
+      }
+
+      const prices = candles.map((c) => getPrice(c, priceField));
+      const bbData = calculateBollingerBands(prices, period, multiplier);
+
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const round4 = (n: number) => Math.round(n * 10000) / 10000;
+
+      const results = bbData.map((d) => ({
+        time: candles[d.price_index].time,
+        upper: round2(d.upper),
+        middle: round2(d.middle),
+        lower: round2(d.lower),
+        percent_b: round4(d.percent_b),
+        bandwidth: round4(d.bandwidth),
+      }));
+
+      const latest = results[results.length - 1];
+      return {
+        symbol,
+        interval: bbInterval,
+        period,
+        multiplier,
+        price_field: priceField,
+        candle_count: candles.length,
+        bb_count: results.length,
+        latest_upper: latest?.upper ?? null,
+        latest_middle: latest?.middle ?? null,
+        latest_lower: latest?.lower ?? null,
+        latest_percent_b: latest?.percent_b ?? null,
+        latest_bandwidth: latest?.bandwidth ?? null,
+        bollinger_bands: results,
       };
     }
 
