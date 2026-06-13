@@ -747,6 +747,44 @@ const tools: Tool[] = [
   },
 
   {
+    name: "get_technical_summary",
+    description:
+      "종목의 주요 기술 지표를 한 번에 조회합니다. 현재가·RSI·MACD·볼린저밴드·ADX·ATR·스토캐스틱·EMA20/60·거래량MA와 종합 신호(signal score)를 반환합니다. AI 자동매매에서 분석 호출 횟수를 최소화하는 데 적합합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"],
+          description: "봉 단위 (기본값 1d)",
+        },
+      },
+    },
+  },
+
+  {
+    name: "get_position_risk",
+    description:
+      "ATR 기반 스탑로스 가격과 계좌 잔고 대비 적정 포지션 규모를 계산합니다. AI 자동매매에서 주문 전 리스크 관리용으로 호출합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "account_seq"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        account_seq: { type: "number", description: "계좌 식별자 (get_accounts로 조회한 accountSeq)" },
+        side: { type: "string", enum: ["BUY", "SELL"], description: "매수/매도 방향 (기본값 BUY)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "ATR 계산 봉 단위 (기본값 1d)" },
+        entry_price: { type: "number", description: "진입 가격. 생략 시 최근 종가 사용" },
+        atr_period: { type: "number", description: "ATR 기간 (기본값 14)" },
+        atr_multiplier: { type: "number", description: "스탑로스 거리 = ATR × 배수 (기본값 2.0)" },
+        risk_percent: { type: "number", description: "계좌 잔고 대비 허용 손실 비율 % (기본값 1.0)" },
+      },
+    },
+  },
+
+  {
     name: "get_ema",
     description:
       "종목의 지수이동평균(EMA)을 계산합니다. 캔들 데이터를 기반으로 지정한 봉 단위·기간·계산 기준으로 EMA 시계열을 반환합니다.",
@@ -1549,6 +1587,125 @@ async function handleTool(name: string, args: Args): Promise<unknown> {
       const results = sarData.map((d) => ({ time: candles[d.time_index].time, sar: Math.round(d.sar * 100) / 100, trend: d.trend, reversal: d.reversal }));
       const latest = results[results.length - 1];
       return { symbol, interval: sarInterval, initial_af: initialAF, step, max_af: maxAF, candle_count: candles.length, sar_count: results.length, latest_sar: latest?.sar ?? null, latest_trend: latest?.trend ?? null, reversal_count: sarData.filter((d) => d.reversal).length, parabolic_sar: results };
+    }
+
+    case "get_technical_summary": {
+      const symbol = String(args.symbol);
+      const sumInterval = String(args.interval ?? "1d") as EmaInterval;
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(sumInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, 200 * rawPerUnit[sumInterval]);
+      const candles = !["1d", "1m"].includes(sumInterval) ? aggregateCandles(rawCandles, makeBucketKey(sumInterval)) : rawCandles;
+      if (candles.length < 30) throw new Error(`기술 지표 계산 데이터 부족. 필요: 30개, 조회됨: ${candles.length}개`);
+
+      const prices = candles.map((c) => c.close);
+      const latest = candles[candles.length - 1];
+      const prev = candles[candles.length - 2];
+      const r2 = (v: number) => Math.round(v * 100) / 100;
+      const r4 = (v: number) => Math.round(v * 10000) / 10000;
+
+      const rsiArr = calculateRSI(prices, 14);
+      const macdArr = calculateMACD(prices, 12, 26, 9);
+      const bbArr = calculateBollingerBands(prices, 20, 2);
+      const adxArr = candles.length >= 29 ? calculateADX(candles, 14) : [];
+      const atrArr = calculateATR(candles, 14);
+      const stochArr = calculateStochastic(candles, 14, 3, 3);
+      const ema20Arr = calculateEMA(prices, 20);
+      const ema60Arr = candles.length >= 60 ? calculateEMA(prices, 60) : [];
+
+      const rsi = rsiArr[rsiArr.length - 1] ?? null;
+      const macd = macdArr[macdArr.length - 1] ?? null;
+      const bb = bbArr[bbArr.length - 1] ?? null;
+      const adx = adxArr[adxArr.length - 1] ?? null;
+      const atr = atrArr[atrArr.length - 1] ?? null;
+      const stoch = stochArr[stochArr.length - 1] ?? null;
+      const ema20 = ema20Arr[ema20Arr.length - 1] ?? null;
+      const ema60 = ema60Arr.length > 0 ? ema60Arr[ema60Arr.length - 1] : null;
+
+      const volWindow = candles.slice(-Math.min(20, candles.length));
+      const volMA20 = Math.round(volWindow.reduce((s, c) => s + c.volume, 0) / volWindow.length);
+      const volRatio = r2(latest.volume / volMA20);
+
+      let score = 0;
+      if (rsi) { if (rsi.rsi <= 30) score++; else if (rsi.rsi >= 70) score--; }
+      if (macd) { if (macd.histogram > 0) score++; else if (macd.histogram < 0) score--; }
+      if (ema20 !== null) { if (latest.close > ema20) score++; else if (latest.close < ema20) score--; }
+      if (adx && adx.adx >= 25) { if (adx.plus_di > adx.minus_di) score++; else score--; }
+      if (stoch) { if (stoch.k <= 20) score++; else if (stoch.k >= 80) score--; }
+      const overall = score >= 3 ? "strong_buy" : score >= 1 ? "buy" : score <= -3 ? "strong_sell" : score <= -1 ? "sell" : "neutral";
+
+      return {
+        symbol,
+        interval: sumInterval,
+        candle_count: candles.length,
+        price: {
+          current: latest.close, open: latest.open, high: latest.high, low: latest.low, volume: latest.volume,
+          change: r2(latest.close - prev.close),
+          change_percent: r2((latest.close - prev.close) / prev.close * 100),
+        },
+        rsi: rsi ? { value: rsi.rsi, zone: rsi.rsi >= 70 ? "overbought" : rsi.rsi <= 30 ? "oversold" : "neutral" } : null,
+        macd: macd ? { macd: r2(macd.macd), signal: r2(macd.signal), histogram: r2(macd.histogram), trend: macd.histogram > 0 ? "bullish" : "bearish" } : null,
+        bollinger_bands: bb ? { upper: r2(bb.upper), middle: r2(bb.middle), lower: r2(bb.lower), percent_b: r4(bb.percent_b) } : null,
+        adx: adx ? { adx: r2(adx.adx), plus_di: r2(adx.plus_di), minus_di: r2(adx.minus_di), strength: adx.adx >= 25 ? "strong" : "weak", direction: adx.plus_di > adx.minus_di ? "bullish" : "bearish" } : null,
+        atr: atr ? { atr: r2(atr.atr), atr_percent: r2(atr.atr / latest.close * 100) } : null,
+        stochastic: stoch ? { k: r2(stoch.k), d: stoch.d !== null ? r2(stoch.d) : null, zone: stoch.k >= 80 ? "overbought" : stoch.k <= 20 ? "oversold" : "neutral" } : null,
+        ema: { ema20: ema20 !== null ? r2(ema20) : null, ema60: ema60 !== null ? r2(ema60) : null, price_vs_ema20: ema20 !== null ? (latest.close > ema20 ? "above" : "below") : null },
+        volume: { current: latest.volume, ma20: volMA20, ratio: volRatio, spike: volRatio >= 2.0 },
+        signal: { score, overall },
+      };
+    }
+
+    case "get_position_risk": {
+      const symbol = String(args.symbol);
+      const accountSeq = Number(args.account_seq);
+      const side = String(args.side ?? "BUY") as "BUY" | "SELL";
+      const interval = String(args.interval ?? "1d") as EmaInterval;
+      const atrPeriod = Number(args.atr_period ?? 14);
+      const atrMultiplier = Number(args.atr_multiplier ?? 2.0);
+      const riskPercent = Number(args.risk_percent ?? 1.0);
+      const isKr = /^\d{6}$/.test(symbol);
+      const currency = isKr ? "KRW" : "USD";
+
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(interval) ? "1d" : "1m";
+
+      const [rawCandles, bpData] = await Promise.all([
+        fetchCandleBatches(symbol, rawInterval, atrPeriod * 3 * rawPerUnit[interval]),
+        apiRequest("GET", "/api/v1/buying-power", { currency }, undefined, accountSeq) as Promise<Record<string, unknown>>,
+      ]);
+      const candles = !["1d", "1m"].includes(interval) ? aggregateCandles(rawCandles, makeBucketKey(interval)) : rawCandles;
+      if (candles.length < atrPeriod + 1) throw new Error(`ATR 계산 데이터 부족. 필요: ${atrPeriod + 1}개, 조회됨: ${candles.length}개`);
+
+      const atrData = calculateATR(candles, atrPeriod);
+      const latestATR = atrData[atrData.length - 1]?.atr ?? 0;
+      const currentPrice = candles[candles.length - 1].close;
+      const entryPrice = args.entry_price !== undefined ? Number(args.entry_price) : currentPrice;
+
+      const stopLossDistance = latestATR * atrMultiplier;
+      const stopLossPrice = Math.round((side === "BUY" ? entryPrice - stopLossDistance : entryPrice + stopLossDistance) * 100) / 100;
+      const stopLossPercent = Math.round(stopLossDistance / entryPrice * 10000) / 100;
+
+      const bp = Number(bpData?.buyingPower ?? bpData?.buying_power ?? bpData?.amount ?? bpData?.availableAmount ?? 0);
+      const riskAmount = bp * riskPercent / 100;
+      const recommendedQuantity = stopLossDistance > 0 ? Math.floor(riskAmount / stopLossDistance) : 0;
+      const r2 = (v: number) => Math.round(v * 100) / 100;
+
+      return {
+        symbol, interval, side, currency,
+        current_price: currentPrice,
+        entry_price: entryPrice,
+        atr: r2(latestATR),
+        atr_period: atrPeriod,
+        atr_multiplier: atrMultiplier,
+        stop_loss_price: stopLossPrice,
+        stop_loss_distance: r2(stopLossDistance),
+        stop_loss_percent: stopLossPercent,
+        buying_power: bp,
+        risk_percent: riskPercent,
+        risk_amount: r2(riskAmount),
+        recommended_quantity: recommendedQuantity,
+        max_position_value: Math.round(recommendedQuantity * entryPrice),
+      };
     }
 
     case "get_ema": {
