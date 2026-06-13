@@ -1,0 +1,105 @@
+# tossinvest-mcp
+
+토스증권 Open API를 [Model Context Protocol(MCP)](https://modelcontextprotocol.io)로 래핑한 서버입니다. Claude 등 MCP 호환 AI 클라이언트에서 국내/미국 주식 시세 조회 및 주문을 자연어로 실행할 수 있습니다.
+
+## 제공 도구
+
+| 카테고리 | 도구 | 설명 |
+|---|---|---|
+| 인증 | `issue_token_from_env` | 환경변수로 액세스 토큰 자동 발급 |
+| | `issue_token` | Client ID/Secret으로 토큰 발급 |
+| 시세 | `get_prices` | 현재가 조회 (최대 200종목) |
+| | `get_orderbook` | 호가 잔량 조회 |
+| | `get_trades` | 당일 체결 내역 조회 |
+| | `get_candles` | 캔들(OHLCV) 차트 데이터 (1분봉/일봉) |
+| | `get_price_limits` | 상한가/하한가 조회 |
+| 종목 정보 | `get_stocks` | 종목 기본 정보 (최대 200종목) |
+| | `get_stock_warnings` | 투자 유의사항 조회 |
+| 시장 정보 | `get_exchange_rate` | KRW↔USD 환율 조회 |
+| | `get_kr_market_calendar` | 국내 시장 운영 시간 |
+| | `get_us_market_calendar` | 미국 시장 운영 시간 |
+| 계좌 | `get_accounts` | 계좌 목록 조회 |
+| | `get_holdings` | 보유 주식 현황 |
+| | `get_buying_power` | 매수 가능 금액 조회 |
+| | `get_sellable_quantity` | 매도 가능 수량 조회 |
+| | `get_commissions` | 수수료율 조회 |
+| 주문 | `create_order` | 매수/매도 주문 생성 |
+| | `modify_order` | 주문 정정 |
+| | `cancel_order` | 주문 취소 |
+| | `get_orders` | 주문 목록 조회 |
+| | `get_order` | 주문 상세 조회 |
+
+## 시작하기
+
+### 1. 빌드
+
+```bash
+pnpm install
+pnpm build
+```
+
+### 2. 환경변수 설정
+
+토스증권 Open API에서 발급받은 Client ID와 Secret을 환경변수로 설정합니다.
+
+```bash
+export TOSSINVEST_API_KEY=your_client_id
+export TOSSINVEST_SECRET_KEY=your_client_secret
+```
+
+### 3. MCP 클라이언트 등록
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "tossinvest": {
+      "command": "node",
+      "args": ["/path/to/tossinvest-mcp/dist/index.js"],
+      "env": {
+        "TOSSINVEST_API_KEY": "your_client_id",
+        "TOSSINVEST_SECRET_KEY": "your_client_secret"
+      }
+    }
+  }
+}
+```
+
+**Claude Code**:
+
+```bash
+claude mcp add tossinvest -- node /path/to/tossinvest-mcp/dist/index.js
+```
+
+환경변수는 셸 프로파일(`~/.zshrc` 등)에 미리 설정해두거나 위 config의 `env` 블록으로 전달할 수 있습니다.
+
+## 사용 예시
+
+서버 시작 시 환경변수가 있으면 토큰이 자동 발급됩니다. 없는 경우 `issue_token_from_env` 또는 `issue_token` 도구를 먼저 호출하세요.
+
+```
+삼성전자 현재가 알려줘
+→ get_prices(symbols: "005930")
+
+AAPL 일봉 차트 100개 가져와
+→ get_candles(symbol: "AAPL", interval: "1d", count: 100)
+
+내 계좌 보유 종목 보여줘
+→ get_accounts() → get_holdings(account_seq: ...)
+
+삼성전자 1주 시장가 매수
+→ create_order(symbol: "005930", side: "BUY", order_type: "MARKET", quantity: "1", ...)
+```
+
+## 개발
+
+```bash
+pnpm dev   # TypeScript watch 모드
+pnpm build # 빌드
+pnpm start # 빌드된 서버 실행
+```
+
+## 라이선스
+
+MIT
