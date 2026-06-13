@@ -16,6 +16,7 @@
 | | `get_rsi` | 상대강도지수(RSI) — 과매수/과매도 구간·시그널 라인·크로스오버 신호 포함 |
 | | `get_macd` | MACD — MACD 라인·시그널·히스토그램·크로스오버 신호 |
 | | `get_bollinger_bands` | 볼린저 밴드 — 상단·중간·하단 밴드·%B·밴드폭 |
+| | `get_ichimoku` | 일목균형표 — 전환선·기준선·선행스팬1·2·후행스팬·구름 방향·미래 구름 예측 |
 | 종목 정보 | `get_stocks` | 종목 기본 정보 (최대 200종목) |
 | | `get_stock_warnings` | 투자 유의사항 조회 |
 | 시장 정보 | `get_exchange_rate` | KRW↔USD 환율 조회 |
@@ -108,6 +109,10 @@ AAPL MACD 계산해줘
 삼성전자 볼린저 밴드 보여줘
 → get_bollinger_bands(symbol: "005930", interval: "1d")
   (기본값: period=20, multiplier=2)
+
+AAPL 일목균형표 분석해줘
+→ get_ichimoku(symbol: "AAPL", interval: "1d")
+  (기본값: tenkan=9, kijun=26, senkou_b=52, displacement=26)
 ```
 
 ## 개발
