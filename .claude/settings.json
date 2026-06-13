@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tossinvest": {
+      "command": "node",
+      "args": ["/Users/ryum/workspace/tossinvest-mcp/dist/index.js"],
+      "env": {
+        "TOSSINVEST_API_KEY": "",
+        "TOSSINVEST_SECRET_KEY": ""
+      }
+    }
+  }
+}
