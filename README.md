@@ -17,6 +17,12 @@
 | | `get_macd` | MACD — MACD 라인·시그널·히스토그램·크로스오버 신호 |
 | | `get_bollinger_bands` | 볼린저 밴드 — 상단·중간·하단 밴드·%B·밴드폭 |
 | | `get_ichimoku` | 일목균형표 — 전환선·기준선·선행스팬1·2·후행스팬·구름 방향·미래 구름 예측 |
+| | `get_atr` | ATR(평균 실제 범위) — 변동성 측정, 포지션 사이징·스탑로스 거리 설정용 |
+| | `get_adx` | ADX(평균 방향성 지수) — 추세 강도(≥25 강함)·방향(+DI/-DI)·추세/횡보 판별 |
+| | `get_stochastic` | Slow Stochastic — %K·%D·과매수(≥80)/과매도(≤20)·크로스오버 신호 |
+| | `get_obv` | OBV(누적 거래량) — 시그널 라인과 비교한 거래량 기반 추세 방향 |
+| | `get_volume_ma` | 거래량 이동평균 — 현재/평균 비율로 거래량 급등 감지 |
+| | `get_parabolic_sar` | Parabolic SAR — 추세 방향·반전 신호·트레일링 스탑 기준선 |
 | 종목 정보 | `get_stocks` | 종목 기본 정보 (최대 200종목) |
 | | `get_stock_warnings` | 투자 유의사항 조회 |
 | 시장 정보 | `get_exchange_rate` | KRW↔USD 환율 조회 |
