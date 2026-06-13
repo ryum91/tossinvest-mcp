@@ -6,8 +6,7 @@
 
 | 카테고리 | 도구 | 설명 |
 |---|---|---|
-| 인증 | `issue_token_from_env` | 환경변수로 액세스 토큰 자동 발급 |
-| | `issue_token` | Client ID/Secret으로 토큰 발급 |
+| 인증 | `issue_token` | 환경변수로 액세스 토큰 재발급 |
 | 시세 | `get_prices` | 현재가 조회 (최대 200종목) |
 | | `get_orderbook` | 호가 잔량 조회 |
 | | `get_trades` | 당일 체결 내역 조회 |
@@ -40,7 +39,7 @@ pnpm build
 
 ### 2. 환경변수 설정
 
-토스증권 Open API에서 발급받은 Client ID와 Secret을 환경변수로 설정합니다.
+토스증권 Open API에서 발급받은 Client ID와 Secret을 환경변수로 설정합니다. **두 값 모두 필수이며, 설정되지 않으면 서버가 시작되지 않습니다.**
 
 ```bash
 export TOSSINVEST_API_KEY=your_client_id
@@ -76,7 +75,7 @@ claude mcp add tossinvest -- node /path/to/tossinvest-mcp/dist/index.js
 
 ## 사용 예시
 
-서버 시작 시 환경변수가 있으면 토큰이 자동 발급됩니다. 없는 경우 `issue_token_from_env` 또는 `issue_token` 도구를 먼저 호출하세요.
+서버 시작 시 환경변수로 토큰이 자동 발급됩니다. 토큰 만료 시 `issue_token` 도구를 호출해 재발급할 수 있습니다.
 
 ```
 삼성전자 현재가 알려줘

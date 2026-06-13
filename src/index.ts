@@ -79,25 +79,12 @@ async function apiRequest(
 const tools: Tool[] = [
   // ── Auth ──────────────────────────────────────────────────────────────────
   {
-    name: "issue_token_from_env",
+    name: "issue_token",
     description:
-      "환경변수 TOSSINVEST_API_KEY(client_id)와 TOSSINVEST_SECRET_KEY(client_secret)를 사용해 액세스 토큰을 자동 발급합니다. 별도 파라미터 없이 호출하면 됩니다.",
+      "환경변수 TOSSINVEST_API_KEY(client_id)와 TOSSINVEST_SECRET_KEY(client_secret)를 사용해 액세스 토큰을 재발급합니다. 별도 파라미터 없이 호출하면 됩니다.",
     inputSchema: {
       type: "object",
       properties: {},
-    },
-  },
-  {
-    name: "issue_token",
-    description:
-      "OAuth2 Client Credentials Grant으로 액세스 토큰을 발급합니다. 발급된 토큰은 이후 모든 API 호출에 자동으로 사용됩니다.",
-    inputSchema: {
-      type: "object",
-      required: ["client_id", "client_secret"],
-      properties: {
-        client_id: { type: "string", description: "발급받은 클라이언트 ID" },
-        client_secret: { type: "string", description: "발급받은 클라이언트 시크릿" },
-      },
     },
   },
 
@@ -525,29 +512,14 @@ type Args = Record<string, unknown>;
 async function handleTool(name: string, args: Args): Promise<unknown> {
   switch (name) {
     // ── Auth ────────────────────────────────────────────────────────────────
-    case "issue_token_from_env": {
-      const clientId = process.env.TOSSINVEST_API_KEY;
-      const clientSecret = process.env.TOSSINVEST_SECRET_KEY;
-      if (!clientId || !clientSecret) {
-        throw new Error(
-          "환경변수 TOSSINVEST_API_KEY 또는 TOSSINVEST_SECRET_KEY가 설정되지 않았습니다.",
-        );
-      }
-      const token = await issueTokenWithCredentials(clientId, clientSecret);
-      return {
-        access_token: token,
-        message: "환경변수로 토큰이 발급되어 메모리에 저장되었습니다. 이후 모든 API 호출에 자동으로 사용됩니다.",
-      };
-    }
-
     case "issue_token": {
       const token = await issueTokenWithCredentials(
-        String(args.client_id),
-        String(args.client_secret),
+        process.env.TOSSINVEST_API_KEY!,
+        process.env.TOSSINVEST_SECRET_KEY!,
       );
       return {
         access_token: token,
-        message: "토큰이 발급되어 메모리에 저장되었습니다. 이후 모든 API 호출에 자동으로 사용됩니다.",
+        message: "토큰이 재발급되어 메모리에 저장되었습니다. 이후 모든 API 호출에 자동으로 사용됩니다.",
       };
     }
 
@@ -734,17 +706,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
+if (!process.env.TOSSINVEST_API_KEY || !process.env.TOSSINVEST_SECRET_KEY) {
+  process.stderr.write(
+    "오류: 환경변수 TOSSINVEST_API_KEY와 TOSSINVEST_SECRET_KEY가 필요합니다.\n",
+  );
+  process.exit(1);
+}
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// 서버 시작 시 env 자격증명이 있으면 토큰 자동 발급
-if (!accessToken && process.env.TOSSINVEST_API_KEY && process.env.TOSSINVEST_SECRET_KEY) {
-  try {
-    await issueTokenWithCredentials(
-      process.env.TOSSINVEST_API_KEY,
-      process.env.TOSSINVEST_SECRET_KEY,
-    );
-  } catch {
-    // 토큰 발급 실패 시 도구 호출 시점에 에러 반환
-  }
-}
+// 서버 시작 시 토큰 자동 발급
+await issueTokenWithCredentials(
+  process.env.TOSSINVEST_API_KEY,
+  process.env.TOSSINVEST_SECRET_KEY,
+);
