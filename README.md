@@ -14,6 +14,8 @@
 | | `get_price_limits` | 상한가/하한가 조회 |
 | 기술 지표 | `get_ema` | 지수이동평균(EMA) — 봉 단위·기간·기준가 지정 |
 | | `get_rsi` | 상대강도지수(RSI) — 과매수/과매도 구간·시그널 라인·크로스오버 신호 포함 |
+| | `get_macd` | MACD — MACD 라인·시그널·히스토그램·크로스오버 신호 |
+| | `get_bollinger_bands` | 볼린저 밴드 — 상단·중간·하단 밴드·%B·밴드폭 |
 | 종목 정보 | `get_stocks` | 종목 기본 정보 (최대 200종목) |
 | | `get_stock_warnings` | 투자 유의사항 조회 |
 | 시장 정보 | `get_exchange_rate` | KRW↔USD 환율 조회 |
@@ -98,6 +100,14 @@ AAPL 일봉 20일 EMA 계산해줘
 삼성전자 RSI 알려줘
 → get_rsi(symbol: "005930", interval: "1d")
   (기본값: period=14, overbought=70, oversold=30, signal_period=14)
+
+AAPL MACD 계산해줘
+→ get_macd(symbol: "AAPL", interval: "1d")
+  (기본값: fast_period=12, slow_period=26, signal_period=9)
+
+삼성전자 볼린저 밴드 보여줘
+→ get_bollinger_bands(symbol: "005930", interval: "1d")
+  (기본값: period=20, multiplier=2)
 ```
 
 ## 개발
