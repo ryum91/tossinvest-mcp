@@ -74,6 +74,159 @@ async function apiRequest(
   return data;
 }
 
+// ─── EMA helpers ─────────────────────────────────────────────────────────────
+
+interface CandleRaw {
+  time: string;
+  open: string | number;
+  high: string | number;
+  low: string | number;
+  close: string | number;
+  volume: string | number;
+}
+
+interface Candle {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+type PriceField = "close" | "open" | "high" | "low" | "hl_avg" | "hlc_avg" | "ohlc_avg";
+type EmaInterval = "1m" | "5m" | "30m" | "60m" | "1d" | "1w" | "1mo";
+
+async function fetchCandleBatches(
+  symbol: string,
+  rawInterval: "1m" | "1d",
+  targetCount: number,
+): Promise<Candle[]> {
+  const allCandles: Candle[] = [];
+  let before: string | undefined;
+
+  for (let page = 0; page < 10 && allCandles.length < targetCount; page++) {
+    const res = await apiRequest("GET", "/api/v1/candles", {
+      symbol,
+      interval: rawInterval,
+      count: 200,
+      before,
+      adjusted: true,
+    }) as { candles?: CandleRaw[] };
+
+    const batch = res.candles ?? [];
+    if (batch.length === 0) break;
+
+    allCandles.push(
+      ...batch.map((c) => ({
+        time: c.time,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+        volume: Number(c.volume),
+      })),
+    );
+
+    before = batch[batch.length - 1].time;
+    if (batch.length < 200) break;
+  }
+
+  allCandles.sort((a, b) => a.time.localeCompare(b.time));
+  return allCandles;
+}
+
+function makeBucketKey(interval: EmaInterval): (c: Candle) => string {
+  if (interval === "1mo") {
+    return (c) => c.time.slice(0, 7); // YYYY-MM
+  }
+  if (interval === "1w") {
+    return (c) => {
+      const d = new Date(c.time);
+      const day = d.getUTCDay();
+      const diff = day === 0 ? -6 : 1 - day; // shift to Monday
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diff))
+        .toISOString()
+        .slice(0, 10);
+    };
+  }
+  // minute-based intervals
+  const minutes = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1440 }[interval] ?? 1;
+  return (c) => {
+    const d = new Date(c.time);
+    const totalMin = d.getUTCHours() * 60 + d.getUTCMinutes();
+    const bucketMin = Math.floor(totalMin / minutes) * minutes;
+    return new Date(
+      Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), Math.floor(bucketMin / 60), bucketMin % 60),
+    ).toISOString();
+  };
+}
+
+function aggregateCandles(candles: Candle[], keyFn: (c: Candle) => string): Candle[] {
+  const buckets = new Map<string, Candle[]>();
+  for (const c of candles) {
+    const key = keyFn(c);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(c);
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([time, group]) => ({
+      time,
+      open: group[0].open,
+      high: Math.max(...group.map((c) => c.high)),
+      low: Math.min(...group.map((c) => c.low)),
+      close: group[group.length - 1].close,
+      volume: group.reduce((sum, c) => sum + c.volume, 0),
+    }));
+}
+
+function getPrice(candle: Candle, field: PriceField): number {
+  switch (field) {
+    case "hl_avg":  return (candle.high + candle.low) / 2;
+    case "hlc_avg": return (candle.high + candle.low + candle.close) / 3;
+    case "ohlc_avg": return (candle.open + candle.high + candle.low + candle.close) / 4;
+    default: return candle[field];
+  }
+}
+
+function calculateEMA(prices: number[], period: number): number[] {
+  if (prices.length < period) return [];
+  const k = 2 / (period + 1);
+  const seed = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const ema = [seed];
+  for (let i = period; i < prices.length; i++) {
+    ema.push(prices[i] * k + ema[ema.length - 1] * (1 - k));
+  }
+  return ema;
+}
+
+// Wilder's smoothing RSI
+function calculateRSI(prices: number[], period: number): { time_index: number; rsi: number }[] {
+  if (prices.length < period + 1) return [];
+
+  const deltas = prices.slice(1).map((p, i) => p - prices[i]);
+
+  // seed averages using simple mean of first `period` deltas
+  let avgGain = deltas.slice(0, period).reduce((s, d) => s + Math.max(d, 0), 0) / period;
+  let avgLoss = deltas.slice(0, period).reduce((s, d) => s + Math.max(-d, 0), 0) / period;
+
+  const results: { time_index: number; rsi: number }[] = [];
+  const firstRsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  results.push({ time_index: period, rsi: Math.round(firstRsi * 100) / 100 });
+
+  for (let i = period; i < deltas.length; i++) {
+    const gain = Math.max(deltas[i], 0);
+    const loss = Math.max(-deltas[i], 0);
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    const rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    results.push({ time_index: i + 1, rsi: Math.round(rsi * 100) / 100 });
+  }
+
+  return results;
+}
+
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 const tools: Tool[] = [
@@ -165,6 +318,67 @@ const tools: Tool[] = [
         adjusted: {
           type: "boolean",
           description: "수정주가 적용 여부 (기본값 true)",
+        },
+      },
+    },
+  },
+
+  {
+    name: "get_rsi",
+    description:
+      "종목의 RSI(상대강도지수)를 계산합니다. Wilder 평활법을 사용하며 과매수/과매도 구간, 시그널 라인(RSI의 EMA), 크로스오버 신호를 함께 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"],
+          description: "봉 단위: 1m(1분), 5m(5분), 30m(30분), 60m(60분/1시간), 1d(일봉), 1w(주봉), 1mo(월봉)",
+        },
+        period: {
+          type: "number",
+          description: "RSI 기간 (기본값 14)",
+        },
+        overbought: {
+          type: "number",
+          description: "과매수 기준선, 이 값 이상이면 overbought (기본값 70)",
+        },
+        oversold: {
+          type: "number",
+          description: "과매도 기준선, 이 값 이하이면 oversold (기본값 30)",
+        },
+        signal_period: {
+          type: "number",
+          description: "시그널 라인 기간: RSI에 EMA를 적용해 크로스오버 신호를 생성 (선택사항, 예: 9)",
+        },
+      },
+    },
+  },
+
+  {
+    name: "get_ema",
+    description:
+      "종목의 지수이동평균(EMA)을 계산합니다. 캔들 데이터를 기반으로 지정한 봉 단위·기간·계산 기준으로 EMA 시계열을 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval", "period"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"],
+          description: "봉 단위: 1m(1분), 5m(5분), 30m(30분), 60m(60분/1시간), 1d(일봉), 1w(주봉), 1mo(월봉)",
+        },
+        period: {
+          type: "number",
+          description: "EMA 기간 (예: 5, 10, 20, 60, 120, 200)",
+        },
+        price_field: {
+          type: "string",
+          enum: ["close", "open", "high", "low", "hl_avg", "hlc_avg", "ohlc_avg"],
+          description: "계산 기준가. close(종가, 기본값), open(시가), high(고가), low(저가), hl_avg(고저평균), hlc_avg(고저종평균), ohlc_avg(시고저종평균)",
         },
       },
     },
@@ -547,6 +761,125 @@ async function handleTool(name: string, args: Args): Promise<unknown> {
         before: args.before !== undefined ? String(args.before) : undefined,
         adjusted: args.adjusted !== undefined ? Boolean(args.adjusted) : undefined,
       });
+
+    case "get_rsi": {
+      const symbol = String(args.symbol);
+      const rsiInterval = String(args.interval) as EmaInterval;
+      const period = Number(args.period ?? 14);
+      const overbought = Number(args.overbought ?? 70);
+      const oversold = Number(args.oversold ?? 30);
+      const signalPeriod = Number(args.signal_period ?? args.period ?? 14);
+
+      const rawPerUnit: Record<EmaInterval, number> = {
+        "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22,
+      };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(rsiInterval) ? "1d" : "1m";
+      const rawNeeded = (period + 1) * 2 * rawPerUnit[rsiInterval];
+
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, rawNeeded);
+      const needsAggregation = !["1d", "1m"].includes(rsiInterval);
+      const candles = needsAggregation
+        ? aggregateCandles(rawCandles, makeBucketKey(rsiInterval))
+        : rawCandles;
+
+      if (candles.length < period + 1) {
+        throw new Error(
+          `RSI 계산에 필요한 데이터가 부족합니다. 필요: ${period + 1}개, 조회됨: ${candles.length}개 (${rsiInterval} 봉)`,
+        );
+      }
+
+      const prices = candles.map((c) => c.close);
+      const rsiValues = calculateRSI(prices, period);
+
+      // signal line: EMA of RSI values
+      const signalOffset = signalPeriod - 1;
+      const signalValues = calculateEMA(rsiValues.map((r) => r.rsi), signalPeriod);
+
+      const results = rsiValues.map(({ time_index, rsi }, i) => {
+        const zone = rsi >= overbought ? "overbought" : rsi <= oversold ? "oversold" : "neutral";
+        const signal = i >= signalOffset ? signalValues[i - signalOffset] : undefined;
+        const prevSignal = i > signalOffset ? signalValues[i - signalOffset - 1] : undefined;
+        const prevRsi = i > 0 ? rsiValues[i - 1].rsi : undefined;
+        const crossover =
+          signal !== undefined && prevSignal !== undefined && prevRsi !== undefined
+            ? prevRsi < prevSignal && rsi >= signal
+              ? "bullish"
+              : prevRsi > prevSignal && rsi <= signal
+              ? "bearish"
+              : null
+            : null;
+
+        return {
+          time: candles[time_index].time,
+          rsi,
+          zone,
+          ...(signal !== undefined && { signal: Math.round(signal * 100) / 100 }),
+          ...(crossover !== null && { crossover }),
+        };
+      });
+
+      const latest = results[results.length - 1];
+      return {
+        symbol,
+        interval: rsiInterval,
+        period,
+        overbought,
+        oversold,
+        midline: 50,
+        signal_period: signalPeriod,
+        candle_count: candles.length,
+        rsi_count: results.length,
+        latest_rsi: latest?.rsi ?? null,
+        latest_zone: latest?.zone ?? null,
+        ...(latest?.signal !== undefined && { latest_signal: latest.signal }),
+        rsi: results,
+      };
+    }
+
+    case "get_ema": {
+      const symbol = String(args.symbol);
+      const emaInterval = String(args.interval) as EmaInterval;
+      const period = Number(args.period);
+      const priceField: PriceField = (args.price_field as PriceField) ?? "close";
+
+      // raw candles per one aggregated candle (for fetch size estimation)
+      const rawPerUnit: Record<EmaInterval, number> = {
+        "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22,
+      };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(emaInterval) ? "1d" : "1m";
+      const rawNeeded = period * 2 * rawPerUnit[emaInterval];
+
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, rawNeeded);
+      const needsAggregation = !["1d", "1m"].includes(emaInterval);
+      const candles = needsAggregation
+        ? aggregateCandles(rawCandles, makeBucketKey(emaInterval))
+        : rawCandles;
+
+      if (candles.length < period) {
+        throw new Error(
+          `EMA 계산에 필요한 데이터가 부족합니다. 필요: ${period}개, 조회됨: ${candles.length}개 (${emaInterval} 봉)`,
+        );
+      }
+
+      const prices = candles.map((c) => getPrice(c, priceField));
+      const emaValues = calculateEMA(prices, period);
+
+      const results = emaValues.map((value, i) => ({
+        time: candles[period - 1 + i].time,
+        ema: Math.round(value * 100) / 100,
+      }));
+
+      return {
+        symbol,
+        interval: emaInterval,
+        period,
+        price_field: priceField,
+        candle_count: candles.length,
+        ema_count: results.length,
+        latest_ema: results[results.length - 1]?.ema ?? null,
+        ema: results,
+      };
+    }
 
     // ── Stock Info ──────────────────────────────────────────────────────────
     case "get_stocks":
