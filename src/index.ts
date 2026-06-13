@@ -334,6 +334,131 @@ function calculateIchimoku(
   return { results, forecast };
 }
 
+function calculateATR(candles: Candle[], period: number): { time_index: number; atr: number }[] {
+  if (candles.length < period + 1) return [];
+  const tr = candles.slice(1).map((c, i) =>
+    Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close)),
+  );
+  let atr = tr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const results: { time_index: number; atr: number }[] = [{ time_index: period, atr }];
+  for (let i = period; i < tr.length; i++) {
+    atr = (atr * (period - 1) + tr[i]) / period;
+    results.push({ time_index: i + 1, atr });
+  }
+  return results;
+}
+
+function calculateADX(
+  candles: Candle[],
+  period: number,
+): { time_index: number; adx: number; plus_di: number; minus_di: number }[] {
+  if (candles.length < 2 * period + 1) return [];
+  const plusDM: number[] = [], minusDM: number[] = [], tr: number[] = [];
+  for (let i = 1; i < candles.length; i++) {
+    const up = candles[i].high - candles[i - 1].high;
+    const dn = candles[i - 1].low - candles[i].low;
+    plusDM.push(up > 0 && up > dn ? up : 0);
+    minusDM.push(dn > 0 && dn > up ? dn : 0);
+    tr.push(Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i - 1].close),
+      Math.abs(candles[i].low - candles[i - 1].close),
+    ));
+  }
+  const wilderSum = (arr: number[]): number[] => {
+    let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+    const out = [s];
+    for (let i = period; i < arr.length; i++) { s = s - s / period + arr[i]; out.push(s); }
+    return out;
+  };
+  const sTR = wilderSum(tr), sPDM = wilderSum(plusDM), sMDM = wilderSum(minusDM);
+  const plusDI = sPDM.map((v, i) => sTR[i] === 0 ? 0 : 100 * v / sTR[i]);
+  const minusDI = sMDM.map((v, i) => sTR[i] === 0 ? 0 : 100 * v / sTR[i]);
+  const dx = plusDI.map((p, i) => { const s = p + minusDI[i]; return s === 0 ? 0 : 100 * Math.abs(p - minusDI[i]) / s; });
+  let adx = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const results: { time_index: number; adx: number; plus_di: number; minus_di: number }[] = [
+    { time_index: 2 * period - 1, adx, plus_di: plusDI[period - 1], minus_di: minusDI[period - 1] },
+  ];
+  for (let i = period; i < dx.length; i++) {
+    adx = (adx * (period - 1) + dx[i]) / period;
+    const j = i - period + 1;
+    results.push({ time_index: 2 * period - 1 + j, adx, plus_di: plusDI[period - 1 + j], minus_di: minusDI[period - 1 + j] });
+  }
+  return results;
+}
+
+function calculateStochastic(
+  candles: Candle[],
+  kPeriod: number,
+  smoothK: number,
+  dPeriod: number,
+): { time_index: number; k: number; d: number | null }[] {
+  if (candles.length < kPeriod + smoothK + dPeriod - 2) return [];
+  const rawK = candles.slice(kPeriod - 1).map((c, i) => {
+    const slice = candles.slice(i, i + kPeriod);
+    const hi = Math.max(...slice.map((s) => s.high));
+    const lo = Math.min(...slice.map((s) => s.low));
+    return hi === lo ? 50 : (c.close - lo) / (hi - lo) * 100;
+  });
+  const smoothedK: number[] = [];
+  for (let i = smoothK - 1; i < rawK.length; i++) {
+    smoothedK.push(rawK.slice(i - smoothK + 1, i + 1).reduce((a, b) => a + b, 0) / smoothK);
+  }
+  return smoothedK.map((k, i) => ({
+    time_index: kPeriod + smoothK - 2 + i,
+    k,
+    d: i >= dPeriod - 1 ? smoothedK.slice(i - dPeriod + 1, i + 1).reduce((a, b) => a + b, 0) / dPeriod : null,
+  }));
+}
+
+function calculateOBV(candles: Candle[]): number[] {
+  const obv = [candles[0].volume];
+  for (let i = 1; i < candles.length; i++) {
+    const prev = obv[i - 1];
+    obv.push(
+      candles[i].close > candles[i - 1].close ? prev + candles[i].volume
+        : candles[i].close < candles[i - 1].close ? prev - candles[i].volume
+        : prev,
+    );
+  }
+  return obv;
+}
+
+function calculateParabolicSAR(
+  candles: Candle[],
+  initialAF: number,
+  step: number,
+  maxAF: number,
+): { time_index: number; sar: number; trend: "bullish" | "bearish"; reversal: boolean }[] {
+  if (candles.length < 2) return [];
+  let isBullish = candles[1].close > candles[0].close;
+  let af = initialAF;
+  let ep = isBullish ? candles[0].high : candles[0].low;
+  let sar = isBullish ? candles[0].low : candles[0].high;
+  const results: { time_index: number; sar: number; trend: "bullish" | "bearish"; reversal: boolean }[] = [];
+  for (let i = 1; i < candles.length; i++) {
+    sar = sar + af * (ep - sar);
+    let reversal = false;
+    if (isBullish) {
+      sar = i >= 2 ? Math.min(sar, candles[i - 1].low, candles[i - 2].low) : Math.min(sar, candles[i - 1].low);
+      if (candles[i].low <= sar) {
+        isBullish = false; sar = ep; ep = candles[i].low; af = initialAF; reversal = true;
+      } else if (candles[i].high > ep) {
+        ep = candles[i].high; af = Math.min(af + step, maxAF);
+      }
+    } else {
+      sar = i >= 2 ? Math.max(sar, candles[i - 1].high, candles[i - 2].high) : Math.max(sar, candles[i - 1].high);
+      if (candles[i].high >= sar) {
+        isBullish = true; sar = ep; ep = candles[i].high; af = initialAF; reversal = true;
+      } else if (candles[i].low < ep) {
+        ep = candles[i].low; af = Math.min(af + step, maxAF);
+      }
+    }
+    results.push({ time_index: i, sar, trend: isBullish ? "bullish" : "bearish", reversal });
+  }
+  return results;
+}
+
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 const tools: Tool[] = [
@@ -528,6 +653,95 @@ const tools: Tool[] = [
         kijun_period: { type: "number", description: "기준선 기간 (기본값 26)" },
         senkou_b_period: { type: "number", description: "선행스팬2 기간 (기본값 52)" },
         displacement: { type: "number", description: "선행·후행 이동 기간 (기본값 26)" },
+      },
+    },
+  },
+
+  {
+    name: "get_atr",
+    description: "종목의 ATR(평균 실제 범위)을 계산합니다. Wilder 평활법 사용. 변동성 측정으로 포지션 사이징과 스탑로스 거리 자동 설정에 활용됩니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "봉 단위" },
+        period: { type: "number", description: "기간 (기본값 14)" },
+      },
+    },
+  },
+
+  {
+    name: "get_adx",
+    description: "종목의 ADX(평균 방향성 지수)를 계산합니다. ADX≥25이면 강한 추세, +DI>-DI이면 상승 추세. 추세/횡보 판별로 전략 전환에 활용됩니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "봉 단위" },
+        period: { type: "number", description: "기간 (기본값 14)" },
+      },
+    },
+  },
+
+  {
+    name: "get_stochastic",
+    description: "종목의 Slow Stochastic을 계산합니다. %K, %D, 과매수(≥80)/과매도(≤20) 구간, 크로스오버 신호를 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "봉 단위" },
+        k_period: { type: "number", description: "%K 기간 (기본값 14)" },
+        smooth_k: { type: "number", description: "%K 평활 기간, 1이면 Fast Stochastic (기본값 3)" },
+        d_period: { type: "number", description: "%D 기간 (기본값 3)" },
+      },
+    },
+  },
+
+  {
+    name: "get_obv",
+    description: "종목의 OBV(누적 거래량)를 계산합니다. 시그널 라인(EMA of OBV)과 비교해 거래량 기반 추세 방향을 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "봉 단위" },
+        signal_period: { type: "number", description: "시그널 라인 기간 (기본값 20)" },
+      },
+    },
+  },
+
+  {
+    name: "get_volume_ma",
+    description: "종목의 거래량 이동평균을 계산합니다. 현재/평균 거래량 비율로 급등 거래량을 감지합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "봉 단위" },
+        period: { type: "number", description: "이동평균 기간 (기본값 20)" },
+        spike_threshold: { type: "number", description: "거래량 급등 판단 비율 (기본값 2.0, 평균 대비 2배 이상)" },
+      },
+    },
+  },
+
+  {
+    name: "get_parabolic_sar",
+    description: "종목의 Parabolic SAR를 계산합니다. 추세 방향·반전 신호·트레일링 스탑 기준선을 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: { type: "string", enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"], description: "봉 단위" },
+        initial_af: { type: "number", description: "초기 가속 인수 (기본값 0.02)" },
+        step: { type: "number", description: "가속 인수 증가량 (기본값 0.02)" },
+        max_af: { type: "number", description: "최대 가속 인수 (기본값 0.2)" },
       },
     },
   },
@@ -1209,6 +1423,132 @@ async function handleTool(name: string, args: Args): Promise<unknown> {
         cloud_forecast,
         ichimoku,
       };
+    }
+
+    case "get_atr": {
+      const symbol = String(args.symbol);
+      const atrInterval = String(args.interval) as EmaInterval;
+      const period = Number(args.period ?? 14);
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(atrInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, period * 3 * rawPerUnit[atrInterval]);
+      const candles = !["1d", "1m"].includes(atrInterval) ? aggregateCandles(rawCandles, makeBucketKey(atrInterval)) : rawCandles;
+      if (candles.length < period + 1) throw new Error(`ATR 계산 데이터 부족. 필요: ${period + 1}개, 조회됨: ${candles.length}개`);
+      const atrData = calculateATR(candles, period);
+      const results = atrData.map((d) => ({
+        time: candles[d.time_index].time,
+        atr: Math.round(d.atr * 100) / 100,
+        atr_percent: Math.round(d.atr / candles[d.time_index].close * 10000) / 100,
+      }));
+      const latest = results[results.length - 1];
+      return { symbol, interval: atrInterval, period, candle_count: candles.length, atr_count: results.length, latest_atr: latest?.atr ?? null, latest_atr_percent: latest?.atr_percent ?? null, atr: results };
+    }
+
+    case "get_adx": {
+      const symbol = String(args.symbol);
+      const adxInterval = String(args.interval) as EmaInterval;
+      const period = Number(args.period ?? 14);
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(adxInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, period * 5 * rawPerUnit[adxInterval]);
+      const candles = !["1d", "1m"].includes(adxInterval) ? aggregateCandles(rawCandles, makeBucketKey(adxInterval)) : rawCandles;
+      if (candles.length < 2 * period + 1) throw new Error(`ADX 계산 데이터 부족. 필요: ${2 * period + 1}개, 조회됨: ${candles.length}개`);
+      const adxData = calculateADX(candles, period);
+      const r2 = (v: number) => Math.round(v * 100) / 100;
+      const results = adxData.map((d) => ({
+        time: candles[d.time_index].time,
+        adx: r2(d.adx),
+        plus_di: r2(d.plus_di),
+        minus_di: r2(d.minus_di),
+        trend_strength: d.adx >= 25 ? "strong" : "weak",
+        direction: d.plus_di > d.minus_di ? "bullish" : d.plus_di < d.minus_di ? "bearish" : "neutral",
+      }));
+      const latest = results[results.length - 1];
+      return { symbol, interval: adxInterval, period, candle_count: candles.length, adx_count: results.length, latest_adx: latest?.adx ?? null, latest_plus_di: latest?.plus_di ?? null, latest_minus_di: latest?.minus_di ?? null, latest_trend_strength: latest?.trend_strength ?? null, latest_direction: latest?.direction ?? null, adx: results };
+    }
+
+    case "get_stochastic": {
+      const symbol = String(args.symbol);
+      const stochInterval = String(args.interval) as EmaInterval;
+      const kPeriod = Number(args.k_period ?? 14);
+      const smoothK = Number(args.smooth_k ?? 3);
+      const dPeriod = Number(args.d_period ?? 3);
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(stochInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, (kPeriod + smoothK + dPeriod) * 3 * rawPerUnit[stochInterval]);
+      const candles = !["1d", "1m"].includes(stochInterval) ? aggregateCandles(rawCandles, makeBucketKey(stochInterval)) : rawCandles;
+      const minReq = kPeriod + smoothK + dPeriod - 2;
+      if (candles.length < minReq) throw new Error(`스토캐스틱 계산 데이터 부족. 필요: ${minReq}개, 조회됨: ${candles.length}개`);
+      const stochData = calculateStochastic(candles, kPeriod, smoothK, dPeriod);
+      const r2 = (v: number) => Math.round(v * 100) / 100;
+      const results = stochData.map((d, i) => {
+        const prev = i > 0 ? stochData[i - 1] : null;
+        const crossover: "bullish" | "bearish" | null =
+          d.d !== null && prev !== null && prev.d !== null
+            ? prev.k < prev.d && d.k >= d.d ? "bullish"
+            : prev.k > prev.d && d.k <= d.d ? "bearish" : null
+            : null;
+        return { time: candles[d.time_index].time, k: r2(d.k), d: d.d !== null ? r2(d.d) : null, zone: d.k >= 80 ? "overbought" : d.k <= 20 ? "oversold" : "neutral", ...(crossover !== null && { crossover }) };
+      });
+      const latest = results[results.length - 1];
+      return { symbol, interval: stochInterval, k_period: kPeriod, smooth_k: smoothK, d_period: dPeriod, candle_count: candles.length, stochastic_count: results.length, latest_k: latest?.k ?? null, latest_d: latest?.d ?? null, latest_zone: latest?.zone ?? null, stochastic: results };
+    }
+
+    case "get_obv": {
+      const symbol = String(args.symbol);
+      const obvInterval = String(args.interval) as EmaInterval;
+      const signalPeriod = Number(args.signal_period ?? 20);
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(obvInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, signalPeriod * 3 * rawPerUnit[obvInterval]);
+      const candles = !["1d", "1m"].includes(obvInterval) ? aggregateCandles(rawCandles, makeBucketKey(obvInterval)) : rawCandles;
+      if (candles.length < signalPeriod + 1) throw new Error(`OBV 계산 데이터 부족. 필요: ${signalPeriod + 1}개, 조회됨: ${candles.length}개`);
+      const obvValues = calculateOBV(candles);
+      const signalValues = calculateEMA(obvValues, signalPeriod);
+      const signalOffset = signalPeriod - 1;
+      const results = candles.map((c, i) => {
+        const obv = obvValues[i];
+        const signal = i >= signalOffset ? Math.round(signalValues[i - signalOffset]) : null;
+        return { time: c.time, obv, signal, trend: signal !== null ? (obv > signal ? "bullish" : obv < signal ? "bearish" : "neutral") : null };
+      });
+      const latest = results[results.length - 1];
+      return { symbol, interval: obvInterval, signal_period: signalPeriod, candle_count: candles.length, latest_obv: latest?.obv ?? null, latest_signal: latest?.signal ?? null, latest_trend: latest?.trend ?? null, obv: results };
+    }
+
+    case "get_volume_ma": {
+      const symbol = String(args.symbol);
+      const volInterval = String(args.interval) as EmaInterval;
+      const period = Number(args.period ?? 20);
+      const spikeThreshold = Number(args.spike_threshold ?? 2.0);
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(volInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, period * 3 * rawPerUnit[volInterval]);
+      const candles = !["1d", "1m"].includes(volInterval) ? aggregateCandles(rawCandles, makeBucketKey(volInterval)) : rawCandles;
+      if (candles.length < period) throw new Error(`거래량 이동평균 계산 데이터 부족. 필요: ${period}개, 조회됨: ${candles.length}개`);
+      const results = candles.slice(period - 1).map((c, i) => {
+        const volume_ma = Math.round(candles.slice(i, i + period).reduce((sum, s) => sum + s.volume, 0) / period);
+        const ratio = Math.round(c.volume / volume_ma * 100) / 100;
+        return { time: c.time, volume: c.volume, volume_ma, ratio, spike: ratio >= spikeThreshold };
+      });
+      const latest = results[results.length - 1];
+      return { symbol, interval: volInterval, period, spike_threshold: spikeThreshold, candle_count: candles.length, volume_count: results.length, latest_volume: latest?.volume ?? null, latest_volume_ma: latest?.volume_ma ?? null, latest_ratio: latest?.ratio ?? null, latest_spike: latest?.spike ?? null, spike_count: results.filter((r) => r.spike).length, volume_ma: results };
+    }
+
+    case "get_parabolic_sar": {
+      const symbol = String(args.symbol);
+      const sarInterval = String(args.interval) as EmaInterval;
+      const initialAF = Number(args.initial_af ?? 0.02);
+      const step = Number(args.step ?? 0.02);
+      const maxAF = Number(args.max_af ?? 0.2);
+      const rawPerUnit: Record<EmaInterval, number> = { "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22 };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(sarInterval) ? "1d" : "1m";
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, 200 * rawPerUnit[sarInterval]);
+      const candles = !["1d", "1m"].includes(sarInterval) ? aggregateCandles(rawCandles, makeBucketKey(sarInterval)) : rawCandles;
+      if (candles.length < 2) throw new Error(`Parabolic SAR 계산 데이터 부족. 최소 2개 필요`);
+      const sarData = calculateParabolicSAR(candles, initialAF, step, maxAF);
+      const results = sarData.map((d) => ({ time: candles[d.time_index].time, sar: Math.round(d.sar * 100) / 100, trend: d.trend, reversal: d.reversal }));
+      const latest = results[results.length - 1];
+      return { symbol, interval: sarInterval, initial_af: initialAF, step, max_af: maxAF, candle_count: candles.length, sar_count: results.length, latest_sar: latest?.sar ?? null, latest_trend: latest?.trend ?? null, reversal_count: sarData.filter((d) => d.reversal).length, parabolic_sar: results };
     }
 
     case "get_ema": {
