@@ -25,6 +25,8 @@
 | | `get_parabolic_sar` | Parabolic SAR — 추세 방향·반전 신호·트레일링 스탑 기준선 |
 | AI 매매 지원 | `get_technical_summary` | 주요 지표 복합 조회 — RSI·MACD·BB·ADX·ATR·Stochastic·EMA·거래량·종합 신호 한 번에 반환 |
 | | `get_position_risk` | 포지션 리스크 계산 — ATR 기반 스탑로스 가격·적정 수량·최대 포지션 금액 |
+| | `log_trade` | 매매 이력 기록 — 근거(rationale)·지표 스냅샷·태그를 로컬 파일에 저장 |
+| | `get_trade_log` | 매매 이력 조회 — 종목·방향·날짜 필터, 최신순 반환 |
 | 종목 정보 | `get_stocks` | 종목 기본 정보 (최대 200종목) |
 | | `get_stock_warnings` | 투자 유의사항 조회 |
 | 시장 정보 | `get_exchange_rate` | KRW↔USD 환율 조회 |
@@ -57,6 +59,9 @@ pnpm build
 ```bash
 export TOSSINVEST_API_KEY=your_client_id
 export TOSSINVEST_SECRET_KEY=your_client_secret
+
+# 선택: AI 매매 이력 저장 경로 (기본값: ~/.tossinvest-mcp/trade-log.json)
+export TOSSINVEST_TRADE_LOG_PATH=/path/to/trade-log.json
 ```
 
 ### 3. MCP 클라이언트 등록
