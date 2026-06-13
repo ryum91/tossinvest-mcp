@@ -29,7 +29,13 @@ async function issueTokenWithCredentials(clientId: string, clientSecret: string)
     body,
   });
   const data = await res.json() as Record<string, unknown>;
-  if (!res.ok) throw new Error(JSON.stringify(data));
+  if (!res.ok) {
+    const detail = JSON.stringify(data);
+    const hint = data.error === "access_denied" && String(data.error_description ?? "").includes("IP")
+      ? " → TossInvest 개발자 센터에서 현재 IP를 허용 목록에 추가하세요."
+      : "";
+    throw new Error(`토큰 발급 실패 (HTTP ${res.status}): ${detail}${hint}`);
+  }
   accessToken = String(data.access_token);
   return accessToken;
 }
@@ -2035,7 +2041,14 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 
 // 서버 시작 시 토큰 자동 발급
-await issueTokenWithCredentials(
-  process.env.TOSSINVEST_API_KEY,
-  process.env.TOSSINVEST_SECRET_KEY,
-);
+try {
+  await issueTokenWithCredentials(
+    process.env.TOSSINVEST_API_KEY,
+    process.env.TOSSINVEST_SECRET_KEY,
+  );
+  process.stderr.write("[tossinvest-mcp] 토큰 발급 성공. MCP 서버가 준비되었습니다.\n");
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`[tossinvest-mcp] 시작 실패: ${message}\n`);
+  process.exit(1);
+}
