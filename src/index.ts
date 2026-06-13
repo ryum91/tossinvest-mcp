@@ -277,6 +277,63 @@ function calculateBollingerBands(
   return results;
 }
 
+function calculateIchimoku(
+  candles: Candle[],
+  tenkanPeriod: number,
+  kijunPeriod: number,
+  senkouBPeriod: number,
+  displacement: number,
+): {
+  results: {
+    time_index: number;
+    tenkan: number | null;
+    kijun: number | null;
+    chikou: number | null;
+    senkou_a: number | null;
+    senkou_b: number | null;
+  }[];
+  forecast: { periods_ahead: number; senkou_a: number | null; senkou_b: number | null }[];
+} {
+  const n = candles.length;
+
+  const rangeMiddle = (endIdx: number, period: number): number | null => {
+    if (endIdx < period - 1) return null;
+    let max = -Infinity, min = Infinity;
+    for (let i = endIdx - period + 1; i <= endIdx; i++) {
+      if (candles[i].high > max) max = candles[i].high;
+      if (candles[i].low < min) min = candles[i].low;
+    }
+    return (max + min) / 2;
+  };
+
+  const tenkan = candles.map((_, i) => rangeMiddle(i, tenkanPeriod));
+  const kijun = candles.map((_, i) => rangeMiddle(i, kijunPeriod));
+
+  const results = candles.map((_, i) => {
+    const senkouCalcIdx = i - displacement;
+    const ft = senkouCalcIdx >= 0 ? tenkan[senkouCalcIdx] : null;
+    const fk = senkouCalcIdx >= 0 ? kijun[senkouCalcIdx] : null;
+    const senkou_a = ft !== null && fk !== null ? (ft + fk) / 2 : null;
+    const senkou_b = senkouCalcIdx >= 0 ? rangeMiddle(senkouCalcIdx, senkouBPeriod) : null;
+    const chikou = i + displacement < n ? candles[i + displacement].close : null;
+    return { time_index: i, tenkan: tenkan[i], kijun: kijun[i], chikou, senkou_a, senkou_b };
+  });
+
+  // Future cloud: already deterministic from existing tenkan/kijun data
+  const forecast = [];
+  for (let j = 1; j <= displacement; j++) {
+    const calcIdx = n - displacement - 1 + j;
+    if (calcIdx < 0 || calcIdx >= n) continue;
+    const ft = tenkan[calcIdx];
+    const fk = kijun[calcIdx];
+    const senkou_a = ft !== null && fk !== null ? (ft + fk) / 2 : null;
+    const senkou_b = rangeMiddle(calcIdx, senkouBPeriod);
+    forecast.push({ periods_ahead: j, senkou_a, senkou_b });
+  }
+
+  return { results, forecast };
+}
+
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 const tools: Tool[] = [
@@ -449,6 +506,28 @@ const tools: Tool[] = [
           enum: ["close", "open", "high", "low", "hl_avg", "hlc_avg", "ohlc_avg"],
           description: "계산 기준가 (기본값 close)",
         },
+      },
+    },
+  },
+
+  {
+    name: "get_ichimoku",
+    description:
+      "종목의 일목균형표를 계산합니다. 전환선·기준선·선행스팬1·2·후행스팬과 구름(kumo) 방향, 향후 displacement 기간의 구름 예측을 반환합니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "interval"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "30m", "60m", "1d", "1w", "1mo"],
+          description: "봉 단위: 1m(1분), 5m(5분), 30m(30분), 60m(60분/1시간), 1d(일봉), 1w(주봉), 1mo(월봉)",
+        },
+        tenkan_period: { type: "number", description: "전환선 기간 (기본값 9)" },
+        kijun_period: { type: "number", description: "기준선 기간 (기본값 26)" },
+        senkou_b_period: { type: "number", description: "선행스팬2 기간 (기본값 52)" },
+        displacement: { type: "number", description: "선행·후행 이동 기간 (기본값 26)" },
       },
     },
   },
@@ -1048,6 +1127,87 @@ async function handleTool(name: string, args: Args): Promise<unknown> {
         latest_percent_b: latest?.percent_b ?? null,
         latest_bandwidth: latest?.bandwidth ?? null,
         bollinger_bands: results,
+      };
+    }
+
+    case "get_ichimoku": {
+      const symbol = String(args.symbol);
+      const ichiInterval = String(args.interval) as EmaInterval;
+      const tenkanPeriod = Number(args.tenkan_period ?? 9);
+      const kijunPeriod = Number(args.kijun_period ?? 26);
+      const senkouBPeriod = Number(args.senkou_b_period ?? 52);
+      const displacement = Number(args.displacement ?? 26);
+
+      const rawPerUnit: Record<EmaInterval, number> = {
+        "1m": 1, "5m": 5, "30m": 30, "60m": 60, "1d": 1, "1w": 5, "1mo": 22,
+      };
+      const rawInterval: "1m" | "1d" = ["1d", "1w", "1mo"].includes(ichiInterval) ? "1d" : "1m";
+      const rawNeeded = (kijunPeriod + senkouBPeriod + displacement) * 3 * rawPerUnit[ichiInterval];
+
+      const rawCandles = await fetchCandleBatches(symbol, rawInterval, rawNeeded);
+      const candles = !["1d", "1m"].includes(ichiInterval)
+        ? aggregateCandles(rawCandles, makeBucketKey(ichiInterval))
+        : rawCandles;
+
+      const minRequired = kijunPeriod + senkouBPeriod + displacement - 1;
+      if (candles.length < minRequired) {
+        throw new Error(
+          `일목균형표 계산에 필요한 데이터가 부족합니다. 필요: ${minRequired}개, 조회됨: ${candles.length}개 (${ichiInterval} 봉)`,
+        );
+      }
+
+      const { results: raw, forecast: rawForecast } = calculateIchimoku(
+        candles, tenkanPeriod, kijunPeriod, senkouBPeriod, displacement,
+      );
+
+      const round2 = (v: number | null) => v !== null ? Math.round(v * 100) / 100 : null;
+
+      const ichimoku = raw
+        .filter((d) => d.tenkan !== null || d.kijun !== null)
+        .map((d) => {
+          const cloud =
+            d.senkou_a !== null && d.senkou_b !== null
+              ? d.senkou_a > d.senkou_b ? "bullish" : d.senkou_a < d.senkou_b ? "bearish" : "neutral"
+              : null;
+          return {
+            time: candles[d.time_index].time,
+            ...(d.tenkan !== null && { tenkan: round2(d.tenkan) }),
+            ...(d.kijun !== null && { kijun: round2(d.kijun) }),
+            ...(d.chikou !== null && { chikou: round2(d.chikou) }),
+            ...(d.senkou_a !== null && { senkou_a: round2(d.senkou_a) }),
+            ...(d.senkou_b !== null && { senkou_b: round2(d.senkou_b) }),
+            ...(cloud !== null && { cloud }),
+          };
+        });
+
+      const cloud_forecast = rawForecast.map((f) => {
+        const cloud =
+          f.senkou_a !== null && f.senkou_b !== null
+            ? f.senkou_a > f.senkou_b ? "bullish" : f.senkou_a < f.senkou_b ? "bearish" : "neutral"
+            : null;
+        return {
+          periods_ahead: f.periods_ahead,
+          ...(f.senkou_a !== null && { senkou_a: round2(f.senkou_a) }),
+          ...(f.senkou_b !== null && { senkou_b: round2(f.senkou_b) }),
+          ...(cloud !== null && { cloud }),
+        };
+      });
+
+      const latest = ichimoku[ichimoku.length - 1];
+      return {
+        symbol,
+        interval: ichiInterval,
+        tenkan_period: tenkanPeriod,
+        kijun_period: kijunPeriod,
+        senkou_b_period: senkouBPeriod,
+        displacement,
+        candle_count: candles.length,
+        ichimoku_count: ichimoku.length,
+        latest_tenkan: latest?.tenkan ?? null,
+        latest_kijun: latest?.kijun ?? null,
+        latest_cloud: latest?.cloud ?? null,
+        cloud_forecast,
+        ichimoku,
       };
     }
 
