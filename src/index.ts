@@ -2,6 +2,8 @@
 import { setDefaultResultOrder } from "dns";
 setDefaultResultOrder("ipv4first");
 
+import { readFile, writeFile, mkdir } from "fs/promises";
+import { dirname, join } from "path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -459,9 +461,89 @@ function calculateParabolicSAR(
   return results;
 }
 
+// ─── Trade log ───────────────────────────────────────────────────────────────
+
+const TRADE_LOG_PATH = process.env.TOSSINVEST_TRADE_LOG_PATH ??
+  join(process.env.HOME ?? process.cwd(), ".tossinvest-mcp", "trade-log.json");
+
+interface TradeLogEntry {
+  id: string;
+  timestamp: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  order_type: string;
+  quantity: string;
+  price?: string;
+  order_id?: string;
+  rationale?: string;
+  indicators?: Record<string, unknown>;
+  tags?: string[];
+  account_seq: number;
+}
+
+async function readTradeLog(): Promise<TradeLogEntry[]> {
+  try {
+    return JSON.parse(await readFile(TRADE_LOG_PATH, "utf-8")) as TradeLogEntry[];
+  } catch {
+    return [];
+  }
+}
+
+async function appendTradeLog(entry: TradeLogEntry): Promise<void> {
+  const entries = await readTradeLog();
+  entries.push(entry);
+  await mkdir(dirname(TRADE_LOG_PATH), { recursive: true });
+  await writeFile(TRADE_LOG_PATH, JSON.stringify(entries, null, 2), "utf-8");
+}
+
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 const tools: Tool[] = [
+  // ── Trade Log ─────────────────────────────────────────────────────────────
+  {
+    name: "log_trade",
+    description:
+      "매매 실행 후 근거·지표 스냅샷을 로컬 파일에 기록합니다. create_order 호출 후 반드시 호출해 AI 매매 이력을 남깁니다.",
+    inputSchema: {
+      type: "object",
+      required: ["symbol", "side", "quantity", "account_seq"],
+      properties: {
+        symbol: { type: "string", description: "종목 심볼 (예: 005930, AAPL)" },
+        side: { type: "string", enum: ["BUY", "SELL"], description: "매수/매도 방향" },
+        quantity: { type: "string", description: "주문 수량" },
+        account_seq: { type: "number", description: "계좌 식별자" },
+        order_type: { type: "string", description: "주문 유형 (LIMIT/MARKET)" },
+        price: { type: "string", description: "주문 가격" },
+        order_id: { type: "string", description: "create_order 응답의 orderId" },
+        rationale: { type: "string", description: "매매 근거 — 어떤 신호와 판단으로 주문했는지 자세히 기술" },
+        indicators: {
+          type: "object",
+          description: "당시 주요 지표 스냅샷 (get_technical_summary 결과 등을 그대로 전달)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "분류 태그 (예: ['trend-follow', 'rsi-oversold'])",
+        },
+      },
+    },
+  },
+  {
+    name: "get_trade_log",
+    description:
+      "로컬에 저장된 AI 매매 이력을 조회합니다. 과거 매매 근거·지표 상태를 파악해 현재 전략 판단에 활용합니다.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "특정 종목만 필터링 (선택)" },
+        side: { type: "string", enum: ["BUY", "SELL"], description: "매수/매도 필터링 (선택)" },
+        from_date: { type: "string", description: "조회 시작일 (YYYY-MM-DD)" },
+        to_date: { type: "string", description: "조회 종료일 (YYYY-MM-DD)" },
+        limit: { type: "number", description: "최대 조회 건수 (기본값 50, 최신순)" },
+      },
+    },
+  },
+
   // ── Auth ──────────────────────────────────────────────────────────────────
   {
     name: "issue_token",
@@ -1152,6 +1234,37 @@ type Args = Record<string, unknown>;
 
 async function handleTool(name: string, args: Args): Promise<unknown> {
   switch (name) {
+    // ── Trade Log ───────────────────────────────────────────────────────────
+    case "log_trade": {
+      const entry: TradeLogEntry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: new Date().toISOString(),
+        symbol: String(args.symbol),
+        side: String(args.side) as "BUY" | "SELL",
+        order_type: String(args.order_type ?? "UNKNOWN"),
+        quantity: String(args.quantity),
+        account_seq: Number(args.account_seq),
+        ...(args.price !== undefined && { price: String(args.price) }),
+        ...(args.order_id !== undefined && { order_id: String(args.order_id) }),
+        ...(args.rationale !== undefined && { rationale: String(args.rationale) }),
+        ...(args.indicators !== undefined && { indicators: args.indicators as Record<string, unknown> }),
+        ...(args.tags !== undefined && { tags: args.tags as string[] }),
+      };
+      await appendTradeLog(entry);
+      return { success: true, id: entry.id, timestamp: entry.timestamp, log_path: TRADE_LOG_PATH };
+    }
+
+    case "get_trade_log": {
+      let entries = await readTradeLog();
+      if (args.symbol !== undefined) entries = entries.filter((e) => e.symbol === String(args.symbol));
+      if (args.side !== undefined) entries = entries.filter((e) => e.side === String(args.side));
+      if (args.from_date !== undefined) entries = entries.filter((e) => e.timestamp.slice(0, 10) >= String(args.from_date));
+      if (args.to_date !== undefined) entries = entries.filter((e) => e.timestamp.slice(0, 10) <= String(args.to_date));
+      const limit = args.limit !== undefined ? Number(args.limit) : 50;
+      const result = entries.slice(-limit).reverse();
+      return { total: entries.length, count: result.length, log_path: TRADE_LOG_PATH, trades: result };
+    }
+
     // ── Auth ────────────────────────────────────────────────────────────────
     case "issue_token": {
       const token = await issueTokenWithCredentials(
