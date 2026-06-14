@@ -1756,6 +1756,7 @@ async function handleTool(name: string, args: Args): Promise<unknown> {
       return {
         symbol,
         interval: sumInterval,
+        as_of: latest.time,
         candle_count: candles.length,
         price: {
           current: latest.close, open: latest.open, high: latest.high, low: latest.low, volume: latest.volume,
