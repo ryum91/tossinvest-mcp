@@ -5,7 +5,7 @@ node_modules/
 dist/
 
 # Environment
-.env
+# .env 는 변수 이름만 담은 템플릿이라 커밋합니다. 실제 키는 .env.local 에 넣으세요.
 .env.local
 .env.*.local
 
