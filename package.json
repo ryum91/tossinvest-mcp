@@ -1,7 +1,7 @@
 {
-  "name": "tossinvest-mcp",
+  "name": "@ryum91/tossinvest-mcp",
   "version": "2.0.0",
-  "description": "토스증권 Open API MCP 서버",
+  "description": "토스증권 Open API MCP 서버 (국내/미국 주식 시세·계좌·주문·조건주문·기술지표)",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -16,7 +16,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check"
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "prepublishOnly": "pnpm check && pnpm build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -33,5 +34,37 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "8.72.1"
   },
-  "packageManager": "pnpm@10.28.0"
+  "packageManager": "pnpm@10.28.0",
+  "license": "MIT",
+  "author": "ryum91",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryum91/tossinvest-mcp.git"
+  },
+  "homepage": "https://github.com/ryum91/tossinvest-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/ryum91/tossinvest-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tossinvest",
+    "toss-securities",
+    "stock",
+    "trading",
+    "korea"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

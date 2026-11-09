@@ -67,6 +67,36 @@
 |                  | `get_conditional_orders`                | 조건주문 목록 (OPEN / CLOSED)                                                          |
 |                  | `get_conditional_order`                 | 조건주문 상세                                                                          |
 
+## npx 로 바로 사용
+
+빌드 없이 npm 패키지로 실행할 수 있습니다. 키는 MCP 클라이언트 설정의 `env` 로 전달합니다 (WTS > 설정 > Open API 에서 발급, **허용 IP 등록 필수**).
+
+```bash
+# Claude Code
+claude mcp add tossinvest \
+  -e TOSSINVEST_CLIENT_ID=tsck_live_xxx \
+  -e TOSSINVEST_CLIENT_SECRET=tssk_live_xxx \
+  -- npx -y @ryum91/tossinvest-mcp
+```
+
+```json
+// Claude Desktop 등 (mcpServers)
+{
+  "mcpServers": {
+    "tossinvest": {
+      "command": "npx",
+      "args": ["-y", "@ryum91/tossinvest-mcp"],
+      "env": {
+        "TOSSINVEST_CLIENT_ID": "tsck_live_xxx",
+        "TOSSINVEST_CLIENT_SECRET": "tssk_live_xxx"
+      }
+    }
+  }
+}
+```
+
+소스에서 직접 빌드해 쓰려면 아래 "시작하기"를 참고하세요.
+
 ## 시작하기
 
 ### 1. 빌드
