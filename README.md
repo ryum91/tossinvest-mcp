@@ -4,6 +4,19 @@
 
 > 토스증권 Open API **v1.2.28** 스펙 기준 ([llms.txt](https://developers.tossinvest.com/llms.txt) · [OpenAPI JSON](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json)). 웹소켓(실시간 체결·호가·주문 이벤트)은 MCP 요청/응답 모델과 맞지 않아 제공하지 않습니다.
 
+## 빠른 시작
+
+토스증권 Open API 키를 발급하고 **허용 IP 를 등록**한 뒤, 사용하는 클라이언트에 등록합니다. (Node.js 20.19 이상)
+
+```bash
+claude mcp add tossinvest --scope user \
+  -e TOSSINVEST_CLIENT_ID=tsck_live_xxx \
+  -e TOSSINVEST_CLIENT_SECRET=tssk_live_xxx \
+  -- npx -y @ryum91/tossinvest-mcp
+```
+
+Claude Desktop · Cursor · VS Code · Codex 설정과 소스 빌드, 문제 해결은 [설치 가이드](#설치-가이드)를 참고하세요.
+
 ## 제공 도구
 
 | 카테고리         | 도구                                    | 설명                                                                                   |
@@ -67,20 +80,39 @@
 |                  | `get_conditional_orders`                | 조건주문 목록 (OPEN / CLOSED)                                                          |
 |                  | `get_conditional_order`                 | 조건주문 상세                                                                          |
 
-## npx 로 바로 사용
+## 설치 가이드
 
-빌드 없이 npm 패키지로 실행할 수 있습니다. 키는 MCP 클라이언트 설정의 `env` 로 전달합니다 (WTS > 설정 > Open API 에서 발급, **허용 IP 등록 필수**).
+### 사전 준비
+
+1. **Node.js 20.19 이상** (`node -v` 로 확인)
+2. **토스증권 Open API 키 발급**: 토스증권 WTS 로그인 → 설정 → Open API → `client_id` / `client_secret` 발급
+3. **허용 IP 등록**: 같은 화면의 **허용 IP 관리**에 이 서버를 실행할 PC의 공인 IP를 등록합니다. 등록하지 않으면 토큰 발급과 모든 API 호출이 403 으로 거부됩니다. (공인 IP 확인: `curl ifconfig.me`)
+
+> ⚠️ 이 서버는 **실제 계좌에 주문을 낼 수 있는 도구**(주문·조건주문 생성/정정/취소)를 포함합니다. MCP 클라이언트가 해당 도구 호출 전에 사용자 승인을 받도록 설정하고, 자동 승인("항상 허용")은 권장하지 않습니다.
+
+### 방법 1. npx 로 설치 (권장)
+
+빌드 없이 npm 패키지 [`@ryum91/tossinvest-mcp`](https://www.npmjs.com/package/@ryum91/tossinvest-mcp)를 바로 실행합니다. 키는 MCP 클라이언트 설정의 `env` 로 전달합니다.
+
+#### Claude Code
 
 ```bash
-# Claude Code
-claude mcp add tossinvest \
+claude mcp add tossinvest --scope user \
   -e TOSSINVEST_CLIENT_ID=tsck_live_xxx \
   -e TOSSINVEST_CLIENT_SECRET=tssk_live_xxx \
   -- npx -y @ryum91/tossinvest-mcp
 ```
 
+`--scope user` 는 모든 프로젝트에서 사용, 생략하면 현재 프로젝트에서만 사용합니다. 확인: `claude mcp get tossinvest`
+
+#### Claude Desktop
+
+설정 → 개발자 → 구성 편집, 또는 파일을 직접 수정합니다.
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
 ```json
-// Claude Desktop 등 (mcpServers)
 {
   "mcpServers": {
     "tossinvest": {
@@ -95,52 +127,23 @@ claude mcp add tossinvest \
 }
 ```
 
-소스에서 직접 빌드해 쓰려면 아래 "시작하기"를 참고하세요.
+저장 후 Claude Desktop 을 완전히 종료했다가 다시 실행합니다.
 
-## 시작하기
+#### Cursor
 
-### 1. 빌드
+`~/.cursor/mcp.json` (전역) 또는 프로젝트의 `.cursor/mcp.json` — 위 Claude Desktop 과 같은 `mcpServers` 형식입니다.
 
-```bash
-pnpm install
-pnpm build
-```
+#### VS Code (GitHub Copilot)
 
-### 2. 환경변수 설정
-
-토스증권 WTS > 설정 > Open API 에서 발급받은 `client_id` / `client_secret` 을 설정합니다. **허용 IP 관리**에 서버를 실행할 PC의 IP도 등록해야 합니다(미등록 시 403).
-
-가장 간단한 방법은 레포 루트의 `.env.local` 파일입니다 (`.gitignore` 처리됨). 서버가 시작 시 `.env.local` → `.env` 순서로 자동으로 읽으며, MCP config 의 `env` 블록이나 셸 환경변수가 있으면 그 값이 우선합니다.
-
-```bash
-# .env.local
-TOSSINVEST_CLIENT_ID=tsck_live_xxx
-TOSSINVEST_CLIENT_SECRET=tssk_live_xxx
-
-# 선택: AI 매매 이력 저장 경로 (기본값: ~/.tossinvest-mcp/trade-log.json)
-TOSSINVEST_TRADE_LOG_PATH=/path/to/trade-log.json
-# 선택: 토큰 캐시 경로 (기본값: ~/.tossinvest-mcp/token.json)
-TOSSINVEST_TOKEN_CACHE_PATH=/path/to/token.json
-```
-
-> 구 변수명 `TOSSINVEST_API_KEY` / `TOSSINVEST_SECRET_KEY` 도 하위 호환으로 인식합니다.
-
-### 3. MCP 클라이언트 등록
-
-**Claude Code** (`.env.local` 사용 시 env 지정 불필요):
-
-```bash
-claude mcp add tossinvest -- node /path/to/tossinvest-mcp/dist/index.js
-```
-
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+프로젝트의 `.vscode/mcp.json` 또는 명령 팔레트의 **MCP: Open User Configuration**:
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "tossinvest": {
-      "command": "node",
-      "args": ["/path/to/tossinvest-mcp/dist/index.js"],
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@ryum91/tossinvest-mcp"],
       "env": {
         "TOSSINVEST_CLIENT_ID": "tsck_live_xxx",
         "TOSSINVEST_CLIENT_SECRET": "tssk_live_xxx"
@@ -149,6 +152,92 @@ claude mcp add tossinvest -- node /path/to/tossinvest-mcp/dist/index.js
   }
 }
 ```
+
+#### Codex
+
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.tossinvest]
+command = "npx"
+args = ["-y", "@ryum91/tossinvest-mcp"]
+env = { TOSSINVEST_CLIENT_ID = "tsck_live_xxx", TOSSINVEST_CLIENT_SECRET = "tssk_live_xxx" }
+```
+
+> 설정 파일에 실제 키가 들어가므로 **저장소에 커밋하지 마세요** (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json` 등 프로젝트 단위 설정 파일 주의).
+
+### 방법 2. 소스에서 빌드
+
+```bash
+git clone https://github.com/ryum91/tossinvest-mcp.git
+cd tossinvest-mcp
+pnpm install
+pnpm build
+```
+
+키는 레포 루트의 `.env.local` 에 넣습니다 (`.gitignore` 처리됨). 서버가 시작할 때 `.env.local` → `.env` 순서로 자동으로 읽으며, MCP 설정의 `env` 나 셸 환경변수가 있으면 그 값이 우선합니다.
+
+```bash
+# .env.local
+TOSSINVEST_CLIENT_ID=tsck_live_xxx
+TOSSINVEST_CLIENT_SECRET=tssk_live_xxx
+```
+
+클라이언트에는 `npx` 대신 빌드 결과를 등록합니다 (`.env.local` 을 쓰면 `env` 는 생략 가능).
+
+```bash
+claude mcp add tossinvest -- node /절대/경로/tossinvest-mcp/dist/index.js
+```
+
+```json
+{
+  "mcpServers": {
+    "tossinvest": {
+      "command": "node",
+      "args": ["/절대/경로/tossinvest-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+### 환경변수
+
+| 변수                          | 필수 | 설명                                                             |
+| ----------------------------- | ---- | ---------------------------------------------------------------- |
+| `TOSSINVEST_CLIENT_ID`        | ✅   | Open API client_id                                               |
+| `TOSSINVEST_CLIENT_SECRET`    | ✅   | Open API client_secret                                           |
+| `TOSSINVEST_TRADE_LOG_PATH`   |      | AI 매매 이력 저장 경로 (기본 `~/.tossinvest-mcp/trade-log.json`) |
+| `TOSSINVEST_TOKEN_CACHE_PATH` |      | 토큰 캐시 경로 (기본 `~/.tossinvest-mcp/token.json`)             |
+
+> 구 변수명 `TOSSINVEST_API_KEY` / `TOSSINVEST_SECRET_KEY` 도 하위 호환으로 인식합니다.
+
+### 설치 확인
+
+클라이언트를 다시 시작한 뒤 AI 에게 다음과 같이 요청합니다.
+
+```
+삼성전자 현재가 알려줘
+→ get_prices(symbols: "005930")
+```
+
+정상이라면 도구 58개가 등록되고 현재가가 반환됩니다. 서버 로그(stderr)에는 `토큰 확보 성공. MCP 서버가 준비되었습니다.` 가 출력됩니다.
+
+### 업데이트
+
+- npx: 이미 받아 둔 버전이 캐시에 있으면 그대로 쓰일 수 있습니다. 최신 버전을 쓰려면 설정의 패키지를 `@ryum91/tossinvest-mcp@latest` 로 지정하거나, 캐시(`rm -rf ~/.npm/_npx`)를 지우고 클라이언트를 재시작하세요.
+- 소스: `git pull && pnpm install && pnpm build`
+
+### 문제 해결
+
+| 증상                                             | 원인 / 해결                                                                                                                                                                           |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `access_denied`, `ip-not-allowed`, 403           | 현재 PC 의 공인 IP 가 허용 IP 에 없습니다. WTS → 설정 → Open API → 허용 IP 관리에 등록하세요. (VPN·회사망·모바일 핫스팟은 IP 가 바뀝니다)                                             |
+| `invalid_client`                                 | `client_id` / `client_secret` 오타 또는 재발급 전 값입니다. 키를 재발급했다면 설정을 갱신하세요.                                                                                      |
+| `token-revoked`                                  | 같은 키로 다른 곳에서 토큰을 새로 발급했습니다 (토큰은 클라이언트당 1개). 서버가 자동으로 재발급하지만, 같은 키를 여러 프로그램에서 동시에 쓰면 서로 토큰을 무효화할 수 있습니다.     |
+| 429 / `rate-limit-exceeded`                      | 초당 호출 한도 초과. 서버가 `Retry-After` 만큼 대기 후 자동 재시도합니다.                                                                                                             |
+| 서버가 시작되지 않음 (`환경변수 ... 필요합니다`) | `TOSSINVEST_CLIENT_ID` / `TOSSINVEST_CLIENT_SECRET` 이 전달되지 않았습니다. 클라이언트 설정의 `env` 블록을 확인하세요.                                                                |
+| `npx` 첫 실행이 느리거나 `Connection closed`     | 처음 한 번은 패키지를 내려받느라 시간이 걸립니다. 계속 실패하면 터미널에서 `npx -y @ryum91/tossinvest-mcp` 를 직접 실행해 오류 메시지를 확인하고, Node 버전(20.19 이상)을 점검하세요. |
+| 도구가 보이지 않음                               | 클라이언트를 완전히 종료 후 재시작하세요. Claude Code 는 `claude mcp list` 로 연결 상태를 확인합니다.                                                                                 |
 
 ### 토큰 관리
 
