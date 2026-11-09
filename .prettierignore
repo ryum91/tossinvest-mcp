@@ -1,0 +1,7 @@
+dist/
+node_modules/
+pnpm-lock.yaml
+# 토스증권 OpenAPI 원본 스펙 (외부 문서 그대로 유지)
+openapi.json
+# 에디터 / 도구 설정
+.claude/
